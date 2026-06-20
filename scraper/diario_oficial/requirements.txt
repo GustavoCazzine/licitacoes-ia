@@ -1,0 +1,10 @@
+# Dependências do scraper de Diário Oficial (PDF + OCR)
+PyMuPDF>=1.23.0
+beautifulsoup4>=4.12
+requests>=2.32.3
+# OCR (necessário apenas para PDFs escaneados):
+pdf2image>=1.17.0    # requer Poppler instalado no sistema
+pytesseract>=0.3.10  # requer Tesseract instalado no sistema
+Pillow>=10.0
+python-dotenv>=1.0
+psycopg2-binary>=2.9

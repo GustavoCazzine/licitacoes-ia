@@ -1,0 +1,12 @@
+# Dependências do pipeline completo (scraper + classifier + DB)
+anthropic>=0.50.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+requests>=2.32.3
+beautifulsoup4>=4.12
+PyMuPDF>=1.23.0
+# OCR (PDFs escaneados) — requer Tesseract + Poppler instalados no sistema:
+pdf2image>=1.17.0
+pytesseract>=0.3.10
+Pillow>=10.0
+schedule>=1.2.0

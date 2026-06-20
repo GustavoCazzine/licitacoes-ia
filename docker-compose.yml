@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-licitacoes}
+      POSTGRES_USER: ${POSTGRES_USER:-licitacoes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-licitacoes}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-licitacoes}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  cron:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Sobrescreve DATABASE_URL para apontar ao serviço interno do Compose
+      DATABASE_URL: postgresql://${POSTGRES_USER:-licitacoes}:${POSTGRES_PASSWORD:-licitacoes}@postgres:5432/${POSTGRES_DB:-licitacoes}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Para executar imediatamente (dev/teste):
+    #   docker compose run --rm cron python cron.py --agora
+
+volumes:
+  postgres_data:
