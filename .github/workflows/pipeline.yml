@@ -46,10 +46,15 @@ jobs:
       # ── PNCP ──────────────────────────────────────────────────────────────
       - name: Buscar e classificar PNCP
         env:
-          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLASSIFIER_MODEL:  ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
-          CONFIANCA_MINIMA:  ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+          DATABASE_URL:        ${{ secrets.DATABASE_URL }}
+          # Provedor: gemini (gratuito) ou anthropic (pago)
+          CLASSIFIER_PROVIDER: ${{ vars.CLASSIFIER_PROVIDER || 'gemini' }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL:        ${{ vars.GEMINI_MODEL || 'gemini-2.0-flash' }}
+          # Usado apenas se CLASSIFIER_PROVIDER=anthropic:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          CLASSIFIER_MODEL:    ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
+          CONFIANCA_MINIMA:    ${{ vars.CONFIANCA_MINIMA || '0.6' }}
         run: |
           python pipeline.py \
             --uf     "${{ github.event.inputs.uf     || 'SP' }}" \
@@ -59,10 +64,13 @@ jobs:
       # ── Diários Oficiais ───────────────────────────────────────────────────
       - name: Buscar Diários Oficiais (Piracicaba, Americana, Rio Claro)
         env:
-          DATABASE_URL:     ${{ secrets.DATABASE_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLASSIFIER_MODEL: ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
-          CONFIANCA_MINIMA: ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+          DATABASE_URL:        ${{ secrets.DATABASE_URL }}
+          CLASSIFIER_PROVIDER: ${{ vars.CLASSIFIER_PROVIDER || 'gemini' }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL:        ${{ vars.GEMINI_MODEL || 'gemini-2.0-flash' }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          CLASSIFIER_MODEL:    ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
+          CONFIANCA_MINIMA:    ${{ vars.CONFIANCA_MINIMA || '0.6' }}
         run: python -m scraper.diario_oficial.run --salvar
         # Não falha o job se os portais municipais estiverem fora
         continue-on-error: true

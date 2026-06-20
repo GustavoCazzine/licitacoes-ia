@@ -1,5 +1,6 @@
 # Dependências do pipeline completo (scraper + classifier + DB)
 anthropic>=0.50.0
+google-generativeai>=0.8.0
 psycopg2-binary>=2.9
 python-dotenv>=1.0
 requests>=2.32.3

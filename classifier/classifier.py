@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Classificador de editais de licitação via Anthropic API com saída estruturada."""
+"""Classificador de editais — suporta Anthropic (pago) e Google Gemini (gratuito)."""
 import json
 import os
-
-from anthropic import Anthropic
-
-_client: Anthropic | None = None
-
-
-def _get_client() -> Anthropic:
-    global _client
-    if _client is None:
-        _client = Anthropic()  # lê ANTHROPIC_API_KEY do ambiente automaticamente
-    return _client
-
 
 _SYSTEM = (
     "Você é especialista em licitações públicas brasileiras para uma empresa de "
@@ -27,7 +15,8 @@ _SYSTEM = (
     "- Brinquedos ou miniaturas de maquinário\n"
     "- Maquinário escolar/pedagógico\n"
     "- TI, alimentação, serviços não-mecânicos\n\n"
-    "Responda APENAS com o JSON solicitado."
+    "Responda APENAS com JSON no formato exato:\n"
+    '{"relevante": bool, "categoria": string, "confianca": float 0-1, "motivo": string}'
 )
 
 _SCHEMA = {
@@ -45,17 +34,77 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-# Padrão: claude-opus-4-8 para alta precisão.
-# Para reduzir custo em produção, defina CLASSIFIER_MODEL=claude-haiku-4-5 no .env
-MODEL = os.getenv("CLASSIFIER_MODEL", "claude-opus-4-8")
+# gemini (gratuito, 1500 req/dia) ou anthropic (pago, alta precisão)
+PROVIDER = os.getenv("CLASSIFIER_PROVIDER", "anthropic").lower()
 
+
+def _normalizar(result: dict) -> dict:
+    result["confianca"] = round(max(0.0, min(1.0, float(result.get("confianca", 0.0)))), 3)
+    result.setdefault("relevante", False)
+    result.setdefault("categoria", "indefinido")
+    result.setdefault("motivo", "")
+    return result
+
+
+# ── Anthropic ──────────────────────────────────────────────────────────────────
+
+_anthropic_client = None
+
+
+def _get_anthropic():
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import Anthropic
+        _anthropic_client = Anthropic()  # lê ANTHROPIC_API_KEY do ambiente
+    return _anthropic_client
+
+
+def _classificar_anthropic(objeto_raw: str) -> dict:
+    model = os.getenv("CLASSIFIER_MODEL", "claude-opus-4-8")
+    response = _get_anthropic().messages.create(
+        model=model,
+        max_tokens=512,
+        system=_SYSTEM,
+        output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
+        messages=[{"role": "user", "content": f"Classifique este objeto de licitação:\n\n{objeto_raw}"}],
+    )
+    text = next(b.text for b in response.content if b.type == "text")
+    return _normalizar(json.loads(text))
+
+
+# ── Google Gemini (gratuito) ───────────────────────────────────────────────────
+
+def _classificar_gemini(objeto_raw: str) -> dict:
+    import google.generativeai as genai
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise EnvironmentError(
+            "GEMINI_API_KEY não definida. "
+            "Obtenha gratuitamente em: aistudio.google.com → Get API key"
+        )
+
+    genai.configure(api_key=api_key)
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=_SYSTEM,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+        ),
+    )
+
+    prompt = f"Classifique este objeto de licitação:\n\n{objeto_raw}"
+    response = model.generate_content(prompt)
+    return _normalizar(json.loads(response.text))
+
+
+# ── Ponto de entrada ───────────────────────────────────────────────────────────
 
 def classificar(objeto_raw: str) -> dict:
-    """
-    Classifica um edital pelo texto do objeto.
-
-    Retorna: {relevante: bool, categoria: str, confianca: float, motivo: str}
-    """
+    """Retorna {relevante: bool, categoria: str, confianca: float, motivo: str}."""
     if not objeto_raw or not objeto_raw.strip():
         return {
             "relevante": False,
@@ -64,22 +113,6 @@ def classificar(objeto_raw: str) -> dict:
             "motivo": "Objeto do edital vazio ou ausente.",
         }
 
-    response = _get_client().messages.create(
-        model=MODEL,
-        max_tokens=512,
-        system=_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-        messages=[
-            {
-                "role": "user",
-                "content": f"Classifique este objeto de licitação:\n\n{objeto_raw}",
-            }
-        ],
-    )
-
-    text = next(b.text for b in response.content if b.type == "text")
-    result = json.loads(text)
-    result["confianca"] = round(
-        max(0.0, min(1.0, float(result.get("confianca", 0.0)))), 3
-    )
-    return result
+    if PROVIDER == "gemini":
+        return _classificar_gemini(objeto_raw)
+    return _classificar_anthropic(objeto_raw)
