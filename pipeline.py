@@ -28,7 +28,11 @@ CONFIANCA_MINIMA = float(os.getenv("CONFIANCA_MINIMA", "0.6"))
 
 
 def _conectar():
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    url = os.environ["DATABASE_URL"]
+    # Supabase Transaction Pooler requer SSL; adiciona se ausente
+    if "sslmode" not in url:
+        url += ("&" if "?" in url else "?") + "sslmode=require"
+    return psycopg2.connect(url)
 
 
 def _edital_existe(cur, fonte: str, numero: str) -> bool:
