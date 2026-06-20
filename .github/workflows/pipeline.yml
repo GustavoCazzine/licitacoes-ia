@@ -1,0 +1,77 @@
+name: Pipeline diário de licitações
+
+on:
+  # Roda automaticamente de segunda a sexta às 07:00 BRT (= 10:00 UTC)
+  schedule:
+    - cron: '0 10 * * 1-5'
+
+  # Permite rodar manualmente pelo GitHub → Actions → "Run workflow"
+  workflow_dispatch:
+    inputs:
+      uf:
+        description: 'UF para busca no PNCP'
+        default: 'SP'
+      paginas:
+        description: 'Páginas do PNCP'
+        default: '5'
+      dias:
+        description: 'Janela retroativa (dias)'
+        default: '1'
+
+jobs:
+  pipeline:
+    name: Buscar → Classificar → Notificar
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # OCR (necessário para Diários Oficiais escaneados)
+      - name: Instalar Tesseract + Poppler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-por poppler-utils
+
+      - name: Instalar dependências Python
+        run: pip install -r requirements.txt
+
+      # ── PNCP ──────────────────────────────────────────────────────────────
+      - name: Buscar e classificar PNCP
+        env:
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLASSIFIER_MODEL:  ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
+          CONFIANCA_MINIMA:  ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+        run: |
+          python pipeline.py \
+            --uf     "${{ github.event.inputs.uf     || 'SP' }}" \
+            --paginas "${{ github.event.inputs.paginas || '5' }}" \
+            --dias   "${{ github.event.inputs.dias   || '1' }}"
+
+      # ── Diários Oficiais ───────────────────────────────────────────────────
+      - name: Buscar Diários Oficiais (Piracicaba, Americana, Rio Claro)
+        env:
+          DATABASE_URL:     ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLASSIFIER_MODEL: ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
+          CONFIANCA_MINIMA: ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+        run: python -m scraper.diario_oficial.run --salvar
+        # Não falha o job se os portais municipais estiverem fora
+        continue-on-error: true
+
+      # ── Telegram ──────────────────────────────────────────────────────────
+      - name: Enviar alertas Telegram
+        env:
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          CONFIANCA_MINIMA:   ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+        run: python -m notifier.telegram
