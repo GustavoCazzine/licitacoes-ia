@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getEditais, countByFilter, type FilterKey } from '@/lib/queries';
+import { getEditais, countByFilter, type FilterKey, type FilterCounts } from '@/lib/queries';
 import { EditaisTable } from '@/components/EditaisTable';
 
 export const dynamic = 'force-dynamic';
@@ -72,7 +72,7 @@ export default async function EditaisPage({ searchParams }: PageProps) {
             const count =
               value === undefined
                 ? counts.todos
-                : counts[value as keyof typeof counts] ?? 0;
+                : (counts as FilterCounts)[value] ?? 0;
             const href = value ? `/editais?filter=${value}` : '/editais';
             return (
               <Link

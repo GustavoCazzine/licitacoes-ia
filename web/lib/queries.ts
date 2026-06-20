@@ -118,7 +118,15 @@ export async function getEditais(
   );
 }
 
-export async function countByFilter(): Promise<Record<FilterKey | 'todos', number>> {
+export interface FilterCounts {
+  todos: number;
+  relevante: number;
+  revisao_manual: number;
+  pendente: number;
+  descartado: number;
+}
+
+export async function countByFilter(): Promise<FilterCounts> {
   const [row] = await query<Record<string, string>>(`
     SELECT
       COUNT(*)::int AS todos,
@@ -141,6 +149,5 @@ export async function countByFilter(): Promise<Record<FilterKey | 'todos', numbe
     revisao_manual: Number(row.revisao_manual),
     pendente: Number(row.pendente),
     descartado: Number(row.descartado),
-    undefined: Number(row.todos),
   };
 }
