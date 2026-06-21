@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 import psycopg2
 from dotenv import load_dotenv
 
-from scraper.comprasnet.scraper import buscar_contratacoes, normalizar
+from scraper.comprasnet.scraper import buscar_contratacoes, normalizar, MODALIDADES
 from classifier.classifier import classificar
 
 load_dotenv()
@@ -100,65 +100,68 @@ def main():
 
     novos = relevantes = revisao = erros = 0
 
-    for pagina in range(1, args.paginas + 1):
-        try:
-            dados = buscar_contratacoes(args.uf, data_inicial, data_final, pagina)
-        except Exception as exc:
-            print(f"[ERRO] Scraper p.{pagina}: {exc}", file=sys.stderr)
-            break
+    for modalidade in MODALIDADES:
+        for pagina in range(1, args.paginas + 1):
+            try:
+                dados = buscar_contratacoes(
+                    args.uf, data_inicial, data_final, pagina, modalidade
+                )
+            except Exception as exc:
+                print(f"[ERRO] Scraper modalidade={modalidade} p.{pagina}: {exc}", file=sys.stderr)
+                break
 
-        itens = dados.get("data", [])
-        if not itens:
-            break
+            itens = dados.get("data", [])
+            if not itens:
+                break
 
-        for raw in itens:
-            item = normalizar(raw)
-            fonte = item.get("fonte") or "pncp"
-            numero = item.get("numero_processo") or ""
-            objeto = item.get("objeto_raw") or ""
+            for raw in itens:
+                item = normalizar(raw)
+                fonte = item.get("fonte") or "pncp"
+                numero = item.get("numero_processo") or ""
+                objeto = item.get("objeto_raw") or ""
 
-            if not numero or not objeto:
-                continue
-
-            with conn.cursor() as cur:
-                if _edital_existe(cur, fonte, numero):
+                if not numero or not objeto:
                     continue
 
-            try:
-                cl = classificar(objeto)
-            except Exception as exc:
-                print(f"[ERRO] LLM '{numero[:40]}': {exc}", file=sys.stderr)
-                erros += 1
-                continue
-
-            try:
                 with conn.cursor() as cur:
-                    edital_id = _salvar_edital(cur, item, cl)
-                conn.commit()
-            except Exception as exc:
-                conn.rollback()
-                print(f"[ERRO] DB '{numero[:40]}': {exc}", file=sys.stderr)
-                erros += 1
-                continue
+                    if _edital_existe(cur, fonte, numero):
+                        continue
 
-            novos += 1
-            if cl["relevante"] and cl["confianca"] >= CONFIANCA_MINIMA:
-                relevantes += 1
-                tag = "RELEVANTE"
-            elif cl["relevante"]:
-                revisao += 1
-                tag = "REVISAO"
-            else:
-                tag = "irrelevante"
+                try:
+                    cl = classificar(objeto)
+                except Exception as exc:
+                    print(f"[ERRO] LLM '{numero[:40]}': {exc}", file=sys.stderr)
+                    erros += 1
+                    continue
 
-            print(
-                f"  [{edital_id}] {tag} conf={cl['confianca']:.2f}"
-                f" [{cl['categoria']}] {objeto[:55]}",
-                file=sys.stderr,
-            )
+                try:
+                    with conn.cursor() as cur:
+                        edital_id = _salvar_edital(cur, item, cl)
+                    conn.commit()
+                except Exception as exc:
+                    conn.rollback()
+                    print(f"[ERRO] DB '{numero[:40]}': {exc}", file=sys.stderr)
+                    erros += 1
+                    continue
 
-        if pagina >= dados.get("totalPaginas", 1):
-            break
+                novos += 1
+                if cl["relevante"] and cl["confianca"] >= CONFIANCA_MINIMA:
+                    relevantes += 1
+                    tag = "RELEVANTE"
+                elif cl["relevante"]:
+                    revisao += 1
+                    tag = "REVISAO"
+                else:
+                    tag = "irrelevante"
+
+                print(
+                    f"  [{edital_id}] {tag} conf={cl['confianca']:.2f}"
+                    f" [{cl['categoria']}] {objeto[:55]}",
+                    file=sys.stderr,
+                )
+
+            if pagina >= dados.get("totalPaginas", 1):
+                break
 
     conn.close()
     print(

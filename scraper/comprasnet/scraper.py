@@ -11,28 +11,53 @@ import argparse
 import io
 import json
 import sys
+import time
 from datetime import date, timedelta
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Garante UTF-8 no stdout mesmo em Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
-TIMEOUT = 30
+TIMEOUT = 60
+
+# Modalidades incluídas: Pregão Eletrônico (6), Dispensa (8), Inexigibilidade (9)
+MODALIDADES = [6, 8, 9]
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; LicitacoesIA/1.0; "
+        "+https://github.com/GustavoCazzine/licitacoes-ia)"
+    ),
+    "Accept": "application/json",
+}
 
 
-def buscar_contratacoes(uf: str, data_inicial: str, data_final: str, pagina: int = 1) -> dict:
+def _session() -> requests.Session:
+    s = requests.Session()
+    retry = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.headers.update(_HEADERS)
+    return s
+
+
+def buscar_contratacoes(
+    uf: str, data_inicial: str, data_final: str,
+    pagina: int = 1, modalidade: int = 6,
+) -> dict:
     params = {
         "dataInicial": data_inicial,
         "dataFinal": data_final,
         "uf": uf,
         "pagina": pagina,
         "tamanhoPagina": 50,
-        "codigoModalidadeContratacao": 6,  # Pregão Eletrônico
+        "codigoModalidadeContratacao": modalidade,
     }
-    resp = requests.get(BASE_URL, params=params, timeout=TIMEOUT)
+    resp = _session().get(BASE_URL, params=params, timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -67,26 +92,35 @@ def main():
     data_inicial = (hoje - timedelta(days=args.dias)).strftime("%Y%m%d")
 
     resultados = []
-    for pagina in range(1, args.paginas + 1):
-        try:
-            dados = buscar_contratacoes(args.uf, data_inicial, data_final, pagina)
-        except requests.HTTPError as exc:
-            print(f"[ERRO] HTTP {exc.response.status_code} na página {pagina}", file=sys.stderr)
-            break
-        except requests.RequestException as exc:
-            print(f"[ERRO] Falha de rede: {exc}", file=sys.stderr)
-            break
+    for modalidade in MODALIDADES:
+        for pagina in range(1, args.paginas + 1):
+            try:
+                dados = buscar_contratacoes(
+                    args.uf, data_inicial, data_final, pagina, modalidade
+                )
+            except requests.HTTPError as exc:
+                print(
+                    f"[ERRO] Scraper modalidade={modalidade} p.{pagina}: "
+                    f"HTTP {exc.response.status_code}",
+                    file=sys.stderr,
+                )
+                break
+            except requests.RequestException as exc:
+                print(f"[ERRO] Scraper modalidade={modalidade} p.{pagina}: {exc}", file=sys.stderr)
+                break
 
-        itens = dados.get("data", [])
-        if not itens:
-            break
+            itens = dados.get("data", [])
+            if not itens:
+                break
 
-        for item in itens:
-            resultados.append(normalizar(item))
+            for item in itens:
+                resultados.append(normalizar(item))
 
-        total_paginas = dados.get("totalPaginas", 1)
-        if pagina >= total_paginas:
-            break
+            total_paginas = dados.get("totalPaginas", 1)
+            if pagina >= total_paginas:
+                break
+
+            time.sleep(0.3)  # respeita rate limit do PNCP
 
     print(json.dumps(resultados, ensure_ascii=False, indent=2))
     print(f"\n# Total: {len(resultados)} contratações", file=sys.stderr)
