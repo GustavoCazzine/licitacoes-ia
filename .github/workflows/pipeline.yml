@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       uf:
-        description: 'UF para busca no PNCP'
-        default: 'SP'
+        description: 'UF específica (ex: MG). Deixe vazio para usar as UFs dos clientes ativos.'
+        default: ''
       paginas:
-        description: 'Páginas do PNCP'
+        description: 'Páginas do PNCP por UF'
         default: '5'
       dias:
         description: 'Janela retroativa (dias)'
@@ -47,19 +47,23 @@ jobs:
       - name: Buscar e classificar PNCP
         env:
           DATABASE_URL:        ${{ secrets.DATABASE_URL }}
-          # Provedor: gemini (gratuito) ou anthropic (pago)
           CLASSIFIER_PROVIDER: ${{ vars.CLASSIFIER_PROVIDER || 'gemini' }}
           GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL:        ${{ vars.GEMINI_MODEL || 'gemini-2.0-flash' }}
-          # Usado apenas se CLASSIFIER_PROVIDER=anthropic:
           ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
           CLASSIFIER_MODEL:    ${{ vars.CLASSIFIER_MODEL || 'claude-opus-4-8' }}
           CONFIANCA_MINIMA:    ${{ vars.CONFIANCA_MINIMA || '0.6' }}
+          CRON_UF:             ${{ vars.CRON_UF || 'SP' }}
         run: |
-          python pipeline.py \
-            --uf     "${{ github.event.inputs.uf     || 'SP' }}" \
+          # Se UF foi informada manualmente, usa ela; caso contrário, auto-detecta pelos clientes
+          if [ -n "${{ github.event.inputs.uf }}" ]; then
+            UF_FLAG="--uf ${{ github.event.inputs.uf }}"
+          else
+            UF_FLAG="--auto-ufs"
+          fi
+          python pipeline.py $UF_FLAG \
             --paginas "${{ github.event.inputs.paginas || '5' }}" \
-            --dias   "${{ github.event.inputs.dias   || '1' }}"
+            --dias    "${{ github.event.inputs.dias   || '1' }}"
 
       # ── Diários Oficiais ───────────────────────────────────────────────────
       - name: Buscar Diários Oficiais (Piracicaba, Americana, Rio Claro)
@@ -80,6 +84,5 @@ jobs:
         env:
           DATABASE_URL:       ${{ secrets.DATABASE_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           CONFIANCA_MINIMA:   ${{ vars.CONFIANCA_MINIMA || '0.6' }}
         run: python -m notifier.telegram

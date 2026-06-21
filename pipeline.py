@@ -5,11 +5,12 @@ Busca no PNCP → classifica via LLM → persiste no Postgres.
 
 Pré-requisitos:
     pip install -r requirements.txt
-    cp .env.example .env  # preencher ANTHROPIC_API_KEY e DATABASE_URL
-    docker compose up -d  # Postgres
+    cp .env.example .env  # preencher API keys e DATABASE_URL
+    docker compose up -d  # Postgres local
 
 Uso:
-    python pipeline.py [--uf SP] [--paginas 2] [--dias 7]
+    python pipeline.py --uf SP --paginas 2 --dias 7
+    python pipeline.py --auto-ufs --paginas 5 --dias 1   # busca UFs dos clientes ativos
 """
 import argparse
 import os
@@ -25,14 +26,39 @@ from classifier.classifier import classificar
 load_dotenv()
 
 CONFIANCA_MINIMA = float(os.getenv("CONFIANCA_MINIMA", "0.6"))
+UF_FALLBACK = os.getenv("CRON_UF", "SP")
 
+
+# ---------------------------------------------------------------------------
+# Banco de dados
+# ---------------------------------------------------------------------------
 
 def _conectar():
     url = os.environ["DATABASE_URL"]
-    # Supabase Transaction Pooler requer SSL; adiciona se ausente
     if "sslmode" not in url:
         url += ("&" if "?" in url else "?") + "sslmode=require"
     return psycopg2.connect(url)
+
+
+def _buscar_ufs_ativas(conn) -> list[str]:
+    """
+    Retorna a lista de UFs distintas configuradas por clientes ativos com Telegram vinculado.
+    Clientes com ufs=[] significam 'todo o Brasil' e não são contabilizados aqui.
+    Se nenhum cliente tiver UF configurada, retorna [UF_FALLBACK].
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT jsonb_array_elements_text(filtros->'ufs') AS uf
+            FROM clientes
+            WHERE filtros ? 'telegram_chat_id'
+              AND ativo = true
+              AND jsonb_array_length(filtros->'ufs') > 0
+            ORDER BY 1
+            """
+        )
+        ufs = [row[0] for row in cur.fetchall()]
+    return ufs or [UF_FALLBACK]
 
 
 def _edital_existe(cur, fonte: str, numero: str) -> bool:
@@ -72,7 +98,7 @@ def _salvar_edital(cur, item: dict, cl: dict) -> int:
             item.get("fonte"),
             item.get("numero_processo"),
             item.get("objeto_raw"),
-            cl.get("motivo"),          # motivo como resumo no MVP
+            cl.get("motivo"),
             item.get("valor_estimado"),
             data_abertura,
             item.get("link_original"),
@@ -85,30 +111,20 @@ def _salvar_edital(cur, item: dict, cl: dict) -> int:
     return cur.fetchone()[0]
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Pipeline PNCP → LLM → Postgres")
-    parser.add_argument("--uf", default="SP", help="UF para filtrar (padrão: SP)")
-    parser.add_argument("--paginas", type=int, default=1, help="Páginas do PNCP a buscar")
-    parser.add_argument("--dias", type=int, default=7, help="Janela retroativa em dias")
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Ingestão por UF
+# ---------------------------------------------------------------------------
 
-    conn = _conectar()
-    print("[DB] Conectado.", file=sys.stderr)
-
-    hoje = date.today()
-    data_final = hoje.strftime("%Y%m%d")
-    data_inicial = (hoje - timedelta(days=args.dias)).strftime("%Y%m%d")
-
+def _processar_uf(conn, uf: str, paginas: int, data_inicial: str, data_final: str) -> dict:
+    """Busca, classifica e persiste todos os editais do PNCP para uma UF. Retorna contadores."""
     novos = relevantes = revisao = erros = 0
 
     for modalidade in MODALIDADES:
-        for pagina in range(1, args.paginas + 1):
+        for pagina in range(1, paginas + 1):
             try:
-                dados = buscar_contratacoes(
-                    args.uf, data_inicial, data_final, pagina, modalidade
-                )
+                dados = buscar_contratacoes(uf, data_inicial, data_final, pagina, modalidade)
             except Exception as exc:
-                print(f"[ERRO] Scraper modalidade={modalidade} p.{pagina}: {exc}", file=sys.stderr)
+                print(f"[ERRO] {uf} modalidade={modalidade} p.{pagina}: {exc}", file=sys.stderr)
                 break
 
             itens = dados.get("data", [])
@@ -156,18 +172,60 @@ def main():
                     tag = "irrelevante"
 
                 print(
-                    f"  [{edital_id}] {tag} conf={cl['confianca']:.2f}"
-                    f" [{cl['categoria']}] {objeto[:55]}",
+                    f"  [{edital_id}] {uf} {tag} conf={cl['confianca']:.2f}"
+                    f" [{cl['categoria']}] {objeto[:50]}",
                     file=sys.stderr,
                 )
 
             if pagina >= dados.get("totalPaginas", 1):
                 break
 
+    return {"novos": novos, "relevantes": relevantes, "revisao": revisao, "erros": erros}
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Pipeline PNCP → LLM → Postgres")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--uf", default=None, help="UF específica (ex: SP)")
+    group.add_argument(
+        "--auto-ufs",
+        action="store_true",
+        help="Busca as UFs configuradas pelos clientes ativos no banco",
+    )
+    parser.add_argument("--paginas", type=int, default=1, help="Páginas do PNCP por UF (padrão: 1)")
+    parser.add_argument("--dias", type=int, default=7, help="Janela retroativa em dias (padrão: 7)")
+    args = parser.parse_args()
+
+    conn = _conectar()
+    print("[DB] Conectado.", file=sys.stderr)
+
+    if args.auto_ufs:
+        ufs = _buscar_ufs_ativas(conn)
+        print(f"[AUTO-UFS] Monitorando {len(ufs)} UF(s): {', '.join(ufs)}", file=sys.stderr)
+    else:
+        ufs = [args.uf or UF_FALLBACK]
+
+    hoje = date.today()
+    data_final = hoje.strftime("%Y%m%d")
+    data_inicial = (hoje - timedelta(days=args.dias)).strftime("%Y%m%d")
+
+    total = {"novos": 0, "relevantes": 0, "revisao": 0, "erros": 0}
+
+    for uf in ufs:
+        print(f"\n[UF] Processando {uf}...", file=sys.stderr)
+        resultado = _processar_uf(conn, uf, args.paginas, data_inicial, data_final)
+        for k in total:
+            total[k] += resultado[k]
+
     conn.close()
     print(
-        f"\n[RESUMO] novos={novos} relevantes={relevantes}"
-        f" revisao_manual={revisao} erros={erros}",
+        f"\n[RESUMO] UFs={len(ufs)} novos={total['novos']} "
+        f"relevantes={total['relevantes']} revisao_manual={total['revisao']} "
+        f"erros={total['erros']}",
         file=sys.stderr,
     )
 

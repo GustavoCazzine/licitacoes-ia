@@ -57,7 +57,7 @@ def _notificar() -> None:
 def job_pncp() -> None:
     _rodar(
         sys.executable, "pipeline.py",
-        "--uf", UF,
+        "--auto-ufs",
         "--paginas", PAGINAS,
         "--dias", DIAS,
     )
