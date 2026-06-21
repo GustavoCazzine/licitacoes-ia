@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
 """
-Notificador Telegram para editais relevantes.
+Notificador Telegram multi-usuário para editais relevantes.
 
-Lê da tabela editais os registros classificados como relevantes
-(classificacao != 'irrelevante', confianca >= limiar) sem alerta enviado ainda,
-envia mensagem via Telegram Bot API e registra em alertas_enviados.
-
-Setup (uma única vez):
-  1. Abra @BotFather no Telegram → /newbot → copie o token
-  2. Adicione o bot ao grupo/canal desejado ou inicie conversa direta
-  3. Para obter o TELEGRAM_CHAT_ID:
-       https://api.telegram.org/bot<TOKEN>/getUpdates
-     O campo "chat.id" aparece após enviar qualquer mensagem ao bot.
-  4. Preencha TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env
+Para cada cliente com Telegram vinculado, busca editais que:
+  1. São relevantes (confiança >= limiar)
+  2. Correspondem aos filtros do cliente (categorias e UFs)
+  3. Ainda não foram enviados a esse cliente
 
 Uso:
   python -m notifier.telegram
 """
-import json
 import os
 import sys
 import time
@@ -30,21 +22,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-DEFAULT_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 CONFIANCA_MINIMA = float(os.getenv("CONFIANCA_MINIMA", "0.6"))
 
 _API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
 # ---------------------------------------------------------------------------
-# Formatação de mensagem
+# Formatação
 # ---------------------------------------------------------------------------
 
 def _formatar_valor(valor) -> str:
     if valor is None:
         return "Não informado"
     try:
-        return f"R$ {float(valor):_.2f}".replace("_", ".").replace(",", ",")
+        return f"R$ {float(valor):_.2f}".replace("_", ".")
     except (TypeError, ValueError):
         return str(valor)
 
@@ -62,6 +53,7 @@ def _formatar_mensagem(edital: dict) -> str:
     objeto = (edital.get("objeto_resumo") or edital.get("objeto_raw") or "")[:400]
     categoria = edital.get("classificacao") or "—"
     link = edital.get("link_original") or ""
+    uf = edital.get("uf") or ""
 
     linhas = [
         "🔍 <b>Nova Licitação Relevante</b>",
@@ -72,6 +64,8 @@ def _formatar_mensagem(edital: dict) -> str:
         f"📅 <b>Abertura:</b> {_formatar_data(edital.get('data_abertura'))}",
         f"📊 <b>Confiança:</b> {confianca_pct}%",
     ]
+    if uf:
+        linhas.append(f"📍 <b>UF:</b> {uf}")
     if link:
         linhas.append(f'\n🔗 <a href="{link}">Ver edital</a>')
 
@@ -104,27 +98,21 @@ def _enviar_mensagem(chat_id: str, texto: str) -> bool:
 # Banco de dados
 # ---------------------------------------------------------------------------
 
-def _get_or_create_cliente(conn, chat_id: str) -> int:
-    """Garante que exista um registro em clientes para este chat_id."""
+def _buscar_clientes(conn) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id FROM clientes WHERE filtros->>'telegram_chat_id' = %s LIMIT 1",
-            (chat_id,),
+            """
+            SELECT id, filtros
+            FROM clientes
+            WHERE filtros ? 'telegram_chat_id'
+              AND ativo = true
+            """
         )
-        row = cur.fetchone()
-        if row:
-            return row[0]
-
-        cur.execute(
-            "INSERT INTO clientes (nome, filtros) VALUES (%s, %s::jsonb) RETURNING id",
-            ("Telegram Default", json.dumps({"telegram_chat_id": chat_id})),
-        )
-        cliente_id = cur.fetchone()[0]
-    conn.commit()
-    return cliente_id
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _buscar_pendentes(cur, confianca_minima: float) -> list[dict]:
+def _buscar_editais_pendentes(cur, cliente_id: int, confianca_minima: float) -> list[dict]:
     cur.execute(
         """
         SELECT
@@ -135,22 +123,38 @@ def _buscar_pendentes(cur, confianca_minima: float) -> list[dict]:
             e.confianca,
             e.valor_estimado,
             e.data_abertura,
-            e.link_original
+            e.link_original,
+            e.uf
         FROM editais e
         WHERE e.classificacao IS NOT NULL
           AND e.classificacao NOT IN ('irrelevante', 'indefinido')
           AND e.confianca >= %s
           AND e.status = 'classificado'
           AND NOT EXISTS (
-              SELECT 1 FROM alertas_enviados a WHERE a.edital_id = e.id
+              SELECT 1 FROM alertas_enviados a
+              WHERE a.edital_id = e.id AND a.cliente_id = %s
           )
         ORDER BY e.created_at DESC
-        LIMIT 50
+        LIMIT 100
         """,
-        (confianca_minima,),
+        (confianca_minima, cliente_id),
     )
     cols = [desc[0] for desc in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _corresponde_filtros(edital: dict, filtros: dict) -> bool:
+    """Retorna True se o edital atende aos filtros de categoria e UF do cliente."""
+    categorias = filtros.get("categorias") or []
+    ufs = filtros.get("ufs") or []
+
+    if categorias and edital.get("classificacao") not in categorias:
+        return False
+
+    if ufs and edital.get("uf") not in ufs:
+        return False
+
+    return True
 
 
 def _registrar_alerta(conn, edital_id: int, cliente_id: int) -> None:
@@ -163,39 +167,55 @@ def _registrar_alerta(conn, edital_id: int, cliente_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entrada principal
+# Entry point
 # ---------------------------------------------------------------------------
 
 def notificar() -> int:
     """
-    Envia alertas Telegram para editais relevantes ainda não notificados.
-    Retorna o número de alertas enviados com sucesso.
+    Envia alertas Telegram personalizados para cada cliente ativo.
+    Retorna o total de alertas enviados com sucesso.
     """
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    cliente_id = _get_or_create_cliente(conn, DEFAULT_CHAT_ID)
+    url = os.environ["DATABASE_URL"]
+    if "sslmode" not in url:
+        url += ("&" if "?" in url else "?") + "sslmode=require"
+    conn = psycopg2.connect(url)
 
-    with conn.cursor() as cur:
-        pendentes = _buscar_pendentes(cur, CONFIANCA_MINIMA)
+    clientes = _buscar_clientes(conn)
+    print(f"[TG] {len(clientes)} cliente(s) com Telegram vinculado.", file=sys.stderr)
 
-    print(f"[TG] {len(pendentes)} edital(is) para notificar.", file=sys.stderr)
-    enviados = 0
+    total_enviados = 0
 
-    for edital in pendentes:
-        texto = _formatar_mensagem(edital)
-        ok = _enviar_mensagem(DEFAULT_CHAT_ID, texto)
+    for cliente in clientes:
+        cliente_id = cliente["id"]
+        filtros = cliente["filtros"]
+        chat_id = filtros.get("telegram_chat_id")
 
-        if ok:
-            _registrar_alerta(conn, edital["id"], cliente_id)
-            enviados += 1
-            print(f"[TG] Alerta enviado — edital #{edital['id']}", file=sys.stderr)
-        else:
-            print(f"[TG] Falha — edital #{edital['id']}", file=sys.stderr)
+        with conn.cursor() as cur:
+            pendentes = _buscar_editais_pendentes(cur, cliente_id, CONFIANCA_MINIMA)
 
-        time.sleep(0.5)  # rate limit: Telegram permite ~30 msg/s, mas 0.5s é seguro
+        correspondentes = [e for e in pendentes if _corresponde_filtros(e, filtros)]
+        print(
+            f"[TG] Cliente {cliente_id}: {len(pendentes)} pendentes, "
+            f"{len(correspondentes)} correspondem aos filtros.",
+            file=sys.stderr,
+        )
+
+        for edital in correspondentes:
+            texto = _formatar_mensagem(edital)
+            ok = _enviar_mensagem(chat_id, texto)
+
+            if ok:
+                _registrar_alerta(conn, edital["id"], cliente_id)
+                total_enviados += 1
+                print(f"[TG] Enviado — edital #{edital['id']} → cliente {cliente_id}", file=sys.stderr)
+            else:
+                print(f"[TG] Falha — edital #{edital['id']} → cliente {cliente_id}", file=sys.stderr)
+
+            time.sleep(0.5)
 
     conn.close()
-    print(f"[TG] Concluído: {enviados}/{len(pendentes)} enviados.", file=sys.stderr)
-    return enviados
+    print(f"[TG] Concluído: {total_enviados} alerta(s) enviado(s).", file=sys.stderr)
+    return total_enviados
 
 
 if __name__ == "__main__":

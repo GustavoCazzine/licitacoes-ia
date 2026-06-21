@@ -9,13 +9,15 @@ export const dynamic = 'force-dynamic';
 // Dados de domínio
 // ---------------------------------------------------------------------------
 
+// Valores devem coincidir exatamente com o campo `categoria` retornado pelo classificador LLM
 const CATEGORIAS = [
   { value: 'trator', label: 'Tratores' },
   { value: 'retroescavadeira', label: 'Retroescavadeiras' },
   { value: 'motoniveladora', label: 'Motoniveladoras' },
   { value: 'motor_diesel', label: 'Motores diesel industriais' },
-  { value: 'peca_manutencao', label: 'Peças e manutenção de frota' },
-  { value: 'locacao_maquinario', label: 'Locação de maquinário agrícola' },
+  { value: 'pecas', label: 'Peças de frota pesada' },
+  { value: 'manutencao', label: 'Manutenção de frota' },
+  { value: 'locacao', label: 'Locação de maquinário' },
 ];
 
 const UFS = [

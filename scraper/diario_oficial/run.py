@@ -66,14 +66,15 @@ def _salvar_no_banco(resultados: list[dict]) -> None:
                     cur.execute(
                         """
                         INSERT INTO editais
-                          (fonte, objeto_raw, link_original, pdf_hash, status)
-                        VALUES (%s, %s, %s, %s, 'pendente')
+                          (fonte, objeto_raw, link_original, pdf_hash, status, uf)
+                        VALUES (%s, %s, %s, %s, 'pendente', %s)
                         """,
                         (
                             "diario_oficial",
                             trecho,
                             item["url_pdf"],
                             hash_ if i == 0 else None,
+                            item.get("uf"),
                         ),
                     )
                     inseridos += 1

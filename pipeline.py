@@ -64,8 +64,8 @@ def _salvar_edital(cur, item: dict, cl: dict) -> int:
         INSERT INTO editais
           (fonte, numero_processo, objeto_raw, objeto_resumo,
            valor_estimado, data_abertura, link_original,
-           classificacao, confianca, status)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           classificacao, confianca, status, uf)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
         """,
         (
@@ -79,6 +79,7 @@ def _salvar_edital(cur, item: dict, cl: dict) -> int:
             cl.get("categoria"),
             confianca,
             status,
+            item.get("uf"),
         ),
     )
     return cur.fetchone()[0]
