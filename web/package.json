@@ -8,10 +8,12 @@
     "start": "next start --port 3000"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
     "next": "^15.1.0",
+    "pg": "^8.13.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "pg": "^8.13.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

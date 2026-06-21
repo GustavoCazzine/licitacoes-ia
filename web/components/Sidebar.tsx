@@ -1,15 +1,35 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 
 const NAV = [
   { href: '/', label: 'Dashboard', icon: '◈' },
   { href: '/editais', label: 'Editais', icon: '≡' },
+  { href: '/configuracoes', label: 'Configurações', icon: '⚙' },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  user?: { name: string; email: string } | null;
+}
+
+export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleLogout() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+  }
+
+  const initials = (user?.name ?? '')
+    .split(' ')
+    .slice(0, 2)
+    .map((n) => n[0] ?? '')
+    .join('')
+    .toUpperCase() || '?';
 
   return (
     <aside className="w-56 flex-shrink-0 flex flex-col bg-slate-950 border-r border-slate-800">
@@ -48,11 +68,26 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-slate-800">
-        <p className="text-xs text-slate-600">v0.1.0 · MVP</p>
-        <p className="text-xs text-slate-600 mt-0.5">Piracicaba, SP</p>
-      </div>
+      {/* User */}
+      {user && (
+        <div className="px-3 py-3 border-t border-slate-800">
+          <div className="flex items-center gap-2 px-2 py-1.5 mb-1">
+            <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-slate-300 truncate">{user.name}</p>
+              <p className="text-xs text-slate-600 truncate">{user.email}</p>
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full text-left px-2 py-1.5 text-xs text-slate-500 hover:text-slate-300 rounded-lg hover:bg-slate-800 transition-all"
+          >
+            Sair →
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

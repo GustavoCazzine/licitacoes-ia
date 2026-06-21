@@ -64,7 +64,7 @@ export default async function DashboardPage() {
         <EditaisTable editais={recentEditais} />
       </section>
 
-      {/* Empty state com instrução de setup */}
+      {/* Empty state */}
       {stats.total === 0 && (
         <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center">
           <p className="text-5xl mb-4">🚀</p>

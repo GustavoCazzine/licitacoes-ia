@@ -4,10 +4,6 @@ import { EditaisTable } from '@/components/EditaisTable';
 
 export const dynamic = 'force-dynamic';
 
-// ---------------------------------------------------------------------------
-// Filter tab config
-// ---------------------------------------------------------------------------
-
 const FILTERS: { label: string; value: FilterKey; color: string }[] = [
   { label: 'Todos', value: undefined, color: 'gray' },
   { label: 'Relevantes', value: 'relevante', color: 'emerald' },
@@ -29,10 +25,6 @@ function tabClasses(active: boolean, color: string): string {
   return 'bg-white text-gray-600 border border-gray-200 hover:border-gray-300 hover:bg-gray-50';
 }
 
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
 interface PageProps {
   searchParams: Promise<{ filter?: string; q?: string }>;
 }
@@ -40,7 +32,6 @@ interface PageProps {
 export default async function EditaisPage({ searchParams }: PageProps) {
   const { filter: rawFilter, q } = await searchParams;
 
-  // Valida o filtro
   const validFilters: (FilterKey | string)[] = [
     'relevante', 'revisao_manual', 'pendente', 'descartado',
   ];
@@ -55,7 +46,6 @@ export default async function EditaisPage({ searchParams }: PageProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Editais</h1>
         <p className="mt-1 text-sm text-gray-400">
@@ -63,9 +53,7 @@ export default async function EditaisPage({ searchParams }: PageProps) {
         </p>
       </div>
 
-      {/* Filter tabs + Search */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        {/* Tabs */}
         <div className="flex flex-wrap gap-2">
           {FILTERS.map(({ label, value, color }) => {
             const active = filter === value || (!filter && !value);
@@ -95,12 +83,7 @@ export default async function EditaisPage({ searchParams }: PageProps) {
           })}
         </div>
 
-        {/* Search */}
-        <form
-          action="/editais"
-          method="GET"
-          className="flex gap-2 ml-auto"
-        >
+        <form action="/editais" method="GET" className="flex gap-2 ml-auto">
           {filter && <input type="hidden" name="filter" value={filter} />}
           <input
             type="search"
@@ -118,7 +101,6 @@ export default async function EditaisPage({ searchParams }: PageProps) {
         </form>
       </div>
 
-      {/* Active search indicator */}
       {q && (
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">
@@ -133,7 +115,6 @@ export default async function EditaisPage({ searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Table */}
       <EditaisTable editais={editais} />
     </div>
   );
